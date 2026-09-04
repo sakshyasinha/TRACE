@@ -15,7 +15,17 @@ class ImageDataset(Dataset[tuple[Tensor, Tensor, Tensor]]):
     def __init__(self, root: Path) -> None:
         self.samples = list(iter_image_paths(root))
         if not self.samples:
-            raise ValueError(f"No images found below {root}")
+            raise ValueError(
+                f"No images found below {root.resolve()}. "
+                "Add images under real/ and generator folders, or run "
+                "python make_demo_data.py for a pipeline smoke test."
+            )
+        labels = {label for _, label in self.samples}
+        if labels != {0, 1}:
+            raise ValueError(
+                f"Expected both real and synthetic images below {root.resolve()}, "
+                f"but found labels {sorted(labels)}. See data/README.md."
+            )
 
     def __len__(self) -> int:
         return len(self.samples)

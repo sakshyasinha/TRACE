@@ -1,0 +1,11 @@
+# Local datasets and trained checkpoints
+backend/data/train/
+backend/data/test_in_distribution/
+backend/data/test_unseen/
+backend/weights/
+
+# Python and frontend artifacts
+__pycache__/
+*.py[cod]
+frontend/node_modules/
+frontend/dist/
