@@ -85,33 +85,60 @@ class Detector:
         self.weights_path = weights_path
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model: SpatialFrequencyDetector | None = None
+        self.sample_count: int | None = None
+        self.image_size = IMAGE_SIZE
+        self.training_stage: str | None = None
+        self.evaluation_completed = False
         if weights_path.exists():
             self.model = SpatialFrequencyDetector().to(self.device)
             checkpoint = torch.load(weights_path, map_location=self.device, weights_only=True)
             self.model.load_state_dict(checkpoint["model_state"])
+            self.sample_count = checkpoint.get("sample_count")
+            self.image_size = checkpoint.get("image_size", IMAGE_SIZE)
+            self.training_stage = checkpoint.get("training_stage")
+            self.evaluation_completed = bool(checkpoint.get("evaluation_completed", False))
             self.model.eval()
 
     @property
     def ready(self) -> bool:
         return self.model is not None
 
+    @property
+    def is_smoke_checkpoint(self) -> bool:
+        return self.sample_count is not None and self.sample_count <= 100
+
+    @property
+    def quality_label(self) -> str:
+        if self.is_smoke_checkpoint:
+            return "smoke-test"
+        if not self.evaluation_completed:
+            return "unvalidated-baseline"
+        return "research"
+
     @torch.inference_mode()
     def predict(self, image_bytes: bytes, filename: str | None) -> Prediction:
         if self.model is None:
             raise RuntimeError("trained weights are not available; run backend/train.py first")
         image = Image.open(BytesIO(image_bytes)).convert("RGB")
-        spatial, frequency = image_to_tensors(image)
+        spatial, frequency = image_to_tensors(image, self.image_size)
         outputs = self.model(spatial.unsqueeze(0).to(self.device), frequency.unsqueeze(0).to(self.device))
         likelihood = float(torch.sigmoid(outputs["fusion_logit"])[0])
         spatial_signal = float(torch.sigmoid(outputs["spatial_logit"])[0])
         frequency_signal = float(torch.sigmoid(outputs["frequency_logit"])[0])
         compressed = BytesIO()
         image.save(compressed, format="JPEG", quality=70)
-        compressed_spatial, compressed_frequency = image_to_tensors(Image.open(BytesIO(compressed.getvalue())))
+        compressed_spatial, compressed_frequency = image_to_tensors(Image.open(BytesIO(compressed.getvalue())), self.image_size)
         compressed_outputs = self.model(compressed_spatial.unsqueeze(0).to(self.device), compressed_frequency.unsqueeze(0).to(self.device))
         compressed_likelihood = float(torch.sigmoid(compressed_outputs["fusion_logit"])[0])
-        label = "likely synthetic" if likelihood >= 0.5 else "likely authentic"
-        return Prediction(label, likelihood, spatial_signal, frequency_signal, abs(likelihood - compressed_likelihood), "inference", f"Analyzed {filename or 'uploaded image'} with the fused spatial + frequency model.")
+        predicted_label = "likely synthetic" if likelihood >= 0.5 else "likely authentic"
+        label = predicted_label if self.evaluation_completed else "unvalidated output"
+        note = f"Analyzed {filename or 'uploaded image'} with the fused spatial + frequency model."
+        if self.is_smoke_checkpoint:
+            note += " Warning: this checkpoint was trained on a small smoke-test dataset and is not research-ready."
+        elif not self.evaluation_completed:
+            note += " Warning: this is an unvalidated baseline; the score is not a calibrated probability or research conclusion."
+        status = "inference" if self.evaluation_completed else "unvalidated-baseline"
+        return Prediction(label, likelihood, spatial_signal, frequency_signal, abs(likelihood - compressed_likelihood), status, note)
 
 
 def iter_image_paths(root: Path) -> Iterable[tuple[Path, int]]:

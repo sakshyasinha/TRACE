@@ -13,11 +13,14 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
-detector = Detector(Path(__file__).parent / "weights" / "trace.pt")
+detector = Detector(Path(__file__).parent / "weights" / "trace-baseline-64.pt")
 
 class ScanResult(BaseModel):
     label: str
     synthetic_likelihood: float
+    synthetic_evidence_score: float | None
+    prediction: str
+    model_quality: str
     spatial_signal: float
     frequency_signal: float
     compression_response: float
@@ -26,7 +29,12 @@ class ScanResult(BaseModel):
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "service": "trace-api", "model_ready": str(detector.ready).lower()}
+    return {
+        "status": "ok",
+        "service": "trace-api",
+        "model_ready": str(detector.ready).lower(),
+        "model_quality": detector.quality_label,
+    }
 
 @app.post("/scan", response_model=ScanResult)
 async def scan(file: UploadFile = File(...)) -> ScanResult:
@@ -40,6 +48,9 @@ async def scan(file: UploadFile = File(...)) -> ScanResult:
     return ScanResult(
         label=prediction.label,
         synthetic_likelihood=prediction.synthetic_likelihood,
+        synthetic_evidence_score=prediction.synthetic_likelihood * 100 if detector.evaluation_completed else None,
+        prediction=prediction.label,
+        model_quality=detector.quality_label,
         spatial_signal=prediction.spatial_signal,
         frequency_signal=prediction.frequency_signal,
         compression_response=prediction.compression_response,
